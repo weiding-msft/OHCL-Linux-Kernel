@@ -291,6 +291,11 @@ u8 kvm_realm_max_pmu_counters(void)
 	return u64_get_bits(rmm_feat_reg0, RMI_FEATURE_REGISTER_0_PMU_NUM_CTRS);
 }
 
+static unsigned int rme_get_max_num_aux_planes(void)
+{
+	return u64_get_bits(rmm_feat_reg0, RMM_FEATURE_REGISTER_0_MAX_NUM_AUX_PLANES);
+}
+
 unsigned int kvm_realm_sve_max_vl(void)
 {
 	return sve_vl_from_vq(u64_get_bits(rmm_feat_reg0,
@@ -357,7 +362,7 @@ static int realm_init_sve_param(struct kvm *kvm, struct realm_params *params)
 	return 0;
 }
 
-static int realm_create_rd(struct kvm *kvm)
+int realm_create_rd(struct kvm *kvm)
 {
 	struct realm *realm = &kvm->arch.realm;
 	struct realm_params *params = realm->params;
@@ -395,7 +400,14 @@ static int realm_create_rd(struct kvm *kvm)
 	params->rtt_level_start = get_start_level(realm);
 	params->rtt_num_start = pgt->pgd_pages;
 	params->rtt_base = kvm->arch.mmu.pgd_phys;
-	params->vmid = realm->vmid;
+	params->vmid = realm->vmid[0];
+	for (i = 0; i < realm->num_aux_planes; i++) {
+		params->aux_vmid[i] = realm->vmid[i+1];
+	}
+
+	if(realm->num_aux_planes > 0) {
+		params->flags1 |= RMI_S2AP_POE_PIE;
+	}
 	params->num_bps = SYS_FIELD_GET(ID_AA64DFR0_EL1, BRPs, dfr0);
 	params->num_wps = SYS_FIELD_GET(ID_AA64DFR0_EL1, WRPs, dfr0);
 
@@ -905,7 +917,7 @@ int realm_map_non_secure(struct realm *realm,
 	return 0;
 }
 
-static int populate_par_region(struct kvm *kvm,
+int populate_par_region(struct kvm *kvm,
 			       phys_addr_t ipa_base,
 			       phys_addr_t ipa_end,
 			       u32 flags)
@@ -1037,7 +1049,7 @@ out:
 	return ret;
 }
 
-static int kvm_populate_realm(struct kvm *kvm,
+int kvm_populate_realm(struct kvm *kvm,
 			      struct kvm_cap_arm_rme_populate_realm_args *args)
 {
 	phys_addr_t ipa_base, ipa_end;
@@ -1225,26 +1237,39 @@ static int rme_vmid_init(void)
 	return 0;
 }
 
-static int rme_vmid_reserve(void)
+static void rme_vmids_release(unsigned int *vmids, unsigned int cnt)
 {
-	int ret;
+	int i;
+
+	spin_lock(&rme_vmid_lock);
+	for (i = 0; i < cnt; i++) {
+		bitmap_release_region(rme_vmid_bitmap, vmids[i], 0);
+	}
+	spin_unlock(&rme_vmid_lock);
+}
+
+int rme_vmids_reserve(unsigned int *vmids, unsigned int cnt)
+{
+	int ret, i;
 	unsigned int vmid_count = 1 << kvm_get_vmid_bits();
 
 	spin_lock(&rme_vmid_lock);
-	ret = bitmap_find_free_region(rme_vmid_bitmap, vmid_count, 0);
+	for (i = 0; i < cnt; i++) {
+		ret = bitmap_find_free_region(rme_vmid_bitmap, vmid_count, 0);
+		if (ret < 0) {
+			spin_unlock(&rme_vmid_lock);
+			rme_vmids_release(vmids, i);
+			return ret;
+		}
+
+		vmids[i] = (unsigned int)ret;
+	}
 	spin_unlock(&rme_vmid_lock);
 
-	return ret;
+	return 0;
 }
 
-static void rme_vmid_release(unsigned int vmid)
-{
-	spin_lock(&rme_vmid_lock);
-	bitmap_release_region(rme_vmid_bitmap, vmid, 0);
-	spin_unlock(&rme_vmid_lock);
-}
-
-static int kvm_create_realm(struct kvm *kvm)
+int kvm_create_realm(struct kvm *kvm)
 {
 	struct realm *realm = &kvm->arch.realm;
 	int ret;
@@ -1254,14 +1279,13 @@ static int kvm_create_realm(struct kvm *kvm)
 	if (kvm_realm_is_created(kvm))
 		return -EEXIST;
 
-	ret = rme_vmid_reserve();
+	ret = rme_vmids_reserve(realm->vmid, realm->num_aux_planes + 1);
 	if (ret < 0)
 		return ret;
-	realm->vmid = ret;
 
 	ret = realm_create_rd(kvm);
 	if (ret) {
-		rme_vmid_release(realm->vmid);
+		rme_vmids_release(realm->vmid, realm->num_aux_planes + 1);
 		return ret;
 	}
 
@@ -1271,6 +1295,17 @@ static int kvm_create_realm(struct kvm *kvm)
 	free_page((unsigned long)realm->params);
 	realm->params = NULL;
 
+	return 0;
+}
+
+static int kvm_rme_config_num_aux_planes(struct realm *realm,
+				struct kvm_cap_arm_rme_config_item *cfg)
+{
+	if (cfg->num_aux_planes > rme_get_max_num_aux_planes())
+		return -EINVAL;
+
+	realm->num_aux_planes = cfg->num_aux_planes;
+	realm->params->num_aux_planes = cfg->num_aux_planes;
 	return 0;
 }
 
@@ -1293,7 +1328,7 @@ static int config_realm_hash_algo(struct realm *realm,
 	return 0;
 }
 
-static int kvm_rme_config_realm(struct kvm *kvm, struct kvm_enable_cap *cap)
+int kvm_rme_config_realm(struct kvm *kvm, struct kvm_enable_cap *cap)
 {
 	struct kvm_cap_arm_rme_config_item cfg;
 	struct realm *realm = &kvm->arch.realm;
@@ -1311,6 +1346,9 @@ static int kvm_rme_config_realm(struct kvm *kvm, struct kvm_enable_cap *cap)
 		break;
 	case KVM_CAP_ARM_RME_CFG_HASH_ALGO:
 		r = config_realm_hash_algo(realm, &cfg);
+		break;
+	case KVM_CAP_ARM_RME_CFG_NUM_AUX_PLANES:
+		r = kvm_rme_config_num_aux_planes(realm, &cfg);
 		break;
 	default:
 		r = -EINVAL;
@@ -1395,7 +1433,7 @@ void kvm_destroy_realm(struct kvm *kvm)
 		realm->rd = NULL;
 	}
 
-	rme_vmid_release(realm->vmid);
+	rme_vmids_release(realm->vmid, realm->num_aux_planes + 1);
 
 	if (realm->spare_page != PHYS_ADDR_MAX) {
 		/* Leak the page if the undelegate fails */

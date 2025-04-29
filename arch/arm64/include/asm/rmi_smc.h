@@ -83,10 +83,14 @@ enum rmi_ripas {
 #define RMI_FEATURE_REGISTER_0_HASH_SHA_512	BIT(33)
 #define RMI_FEATURE_REGISTER_0_GICV3_NUM_LRS	GENMASK(37, 34)
 #define RMI_FEATURE_REGISTER_0_MAX_RECS_ORDER	GENMASK(41, 38)
+#define RMM_FEATURE_REGISTER_0_MAX_NUM_AUX_PLANES	GENMASK(48, 45)
 
 #define RMI_REALM_PARAM_FLAG_LPA2		BIT(0)
 #define RMI_REALM_PARAM_FLAG_SVE		BIT(1)
 #define RMI_REALM_PARAM_FLAG_PMU		BIT(2)
+
+/* Encode S2 Access Permissions using POE/PIE */
+#define RMI_S2AP_POE_PIE			BIT(1)
 
 /*
  * Note many of these fields are smaller than u64 but all fields have u64
@@ -102,12 +106,16 @@ struct realm_params {
 			u64 num_wps;
 			u64 pmu_num_ctrs;
 			u64 hash_algo;
+			u64 num_aux_planes;
 		};
-		u8 padding1[0x400];
+		u8 padding0[0x400];
 	};
 	union { /* 0x400 */
-		u8 rpv[64];
-		u8 padding2[0x400];
+		struct {
+			u8 rpv[64];
+			u64 ats_plane;
+		};
+		u8 padding1[0x400];
 	};
 	union { /* 0x800 */
 		struct {
@@ -115,10 +123,21 @@ struct realm_params {
 			u64 rtt_base;
 			s64 rtt_level_start;
 			u64 rtt_num_start;
+			u64 flags1;
+			u64 mecid;
 		};
-		u8 padding3[0x800];
+		u8 padding2[0x700];
+	};
+	union { /* 0xf00 */
+		u16 aux_vmid[3];
+		u8 padding3[0x80];
+	};
+	union { /* 0xf80 */
+		u64 aux_rtt_base[3];
+		u8 padding4[0x80];
 	};
 };
+
 
 /*
  * The number of GPRs (starting from X0) that are

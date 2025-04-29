@@ -67,8 +67,9 @@ struct realm {
 	phys_addr_t spare_page;
 
 	unsigned long num_aux;
-	unsigned int vmid;
+	unsigned int vmid[4];
 	unsigned int ia_bits;
+	unsigned int num_aux_planes;
 };
 
 /**
