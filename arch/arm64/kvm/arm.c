@@ -933,18 +933,6 @@ int kvm_arch_vcpu_run_pid_change(struct kvm_vcpu *vcpu)
 			return ret;
 	}
 
-	if (!irqchip_in_kernel(kvm)) {
-		/* Userspace irqchip not yet supported with Realms */
-		if (kvm_is_realm(vcpu->kvm))
-			return -EOPNOTSUPP;
-
-		/*
-		 * Tell the rest of the code that there are userspace irqchip
-		 * VMs in the wild.
-		 */
-		static_branch_inc(&userspace_irqchip_in_use);
-	}
-
 	/*
 	 * Initialize traps for protected VMs.
 	 * NOTE: Move to run in EL2 directly, rather than via a hypercall, once
