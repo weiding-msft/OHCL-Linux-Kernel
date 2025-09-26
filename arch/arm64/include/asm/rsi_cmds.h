@@ -7,11 +7,25 @@
 #define __ASM_RSI_CMDS_H
 
 #include <linux/arm-smccc.h>
+#include <linux/kdebug.h>
 
 #include <asm/rsi_smc.h>
 
 #define RSI_GRANULE_SHIFT		12
 #define RSI_GRANULE_SIZE		(_AC(1, UL) << RSI_GRANULE_SHIFT)
+
+#define S2_AP_RW		12
+#define S2_AP_RW_upX		15
+
+#define PLANE_0_INDEX 		0
+#define PLANE_0_PERM_INDEX 	0
+#define PLANE_0_PERM	 	S2_AP_RW
+
+#define PLANE_N_MIN_ID				1
+#define PLANE_N_MAX_ID				2
+#define PLANE_N_MIN_PERM_IDX		2
+#define PLANE_N_MAX_PERM_IDX		15
+#define PLANE_N_PERM	 			S2_AP_RW_upX
 
 enum ripas {
 	RSI_RIPAS_EMPTY = 0,
@@ -154,6 +168,62 @@ static inline int rsi_attestation_token_continue(phys_addr_t granule,
 
 	if (len)
 		*len = res.a1;
+	return res.a0;
+}
+
+static inline unsigned long rsi_mem_set_perm(unsigned long plane_id, unsigned long perm_index,
+		     unsigned long permission)
+{
+	struct arm_smccc_res res;
+
+	arm_smccc_1_1_invoke(SMC_RSI_MEM_SET_PERM_VALUE, plane_id, perm_index,
+					permission, 0, &res);
+	return res.a0;
+}
+
+static inline unsigned long rsi_mem_set_perm_index(unsigned long base,
+				  unsigned long size,
+				  unsigned long perm_index,
+				  unsigned long cookie,
+				  unsigned long *new_cookie)
+{
+	struct arm_smccc_res res;
+
+	arm_smccc_1_1_invoke(SMC_RSI_MEM_SET_PERM_INDEX, base, size, perm_index,
+			cookie, &res);
+	*new_cookie = res.a1;
+	return res.a0;
+}
+
+static inline unsigned long arm_mem_set_perm_index(unsigned long base, unsigned long top,
+			   unsigned long perm_index)
+{
+	int ret;
+	unsigned long cookie = 0, new_cookie;
+
+	do {
+		ret = rsi_mem_set_perm_index(base, top, perm_index, cookie, &new_cookie);
+		cookie = new_cookie;
+	} while (ret == RSI_INCOMPLETE);
+	return ret;
+}
+
+static inline unsigned long rsi_plane_enter(unsigned plane, unsigned long run)
+{
+	struct arm_smccc_res res;
+
+	pr_warn("rsi_plane_enter: plane=%dq, virt run=%lu\n", plane, run);
+	arm_smccc_1_1_invoke(SMC_RSI_PLANE_ENTER,
+			plane, run, 0, 0, &res);
+	return res.a0;
+}
+
+static inline unsigned long rsi_plane_sysreg_write(unsigned long plane_idx, unsigned long sysreg, unsigned long value)
+{
+	struct arm_smccc_res res;
+
+	arm_smccc_1_1_invoke(SMC_RSI_PLANE_SYSREG_WRITE,
+			plane_idx, sysreg, value, 0, &res);
 	return res.a0;
 }
 

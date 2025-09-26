@@ -44,6 +44,12 @@
 
 #endif
 
+#if defined(CONFIG_ARM64)
+
+#include <asm/rsi_cmds.h>
+
+#endif
+
 #include "mshv.h"
 #include "mshv_vtl.h"
 #include "mshv_vtl_local_maps.h"
@@ -370,6 +376,13 @@ static void mshv_vtl_synic_enable_regs(unsigned int cpu)
 {
 	union hv_synic_sint sint;
 
+	#ifdef CONFIG_ARM64
+		/*
+		 * Nothing to do for now, just skip this.
+		 */
+		return;
+	#endif
+
 	sint.as_uint64 = 0;
 	sint.vector = vmbus_interrupt;
 	sint.masked = false;
@@ -394,6 +407,13 @@ static int mshv_vtl_get_vsm_regs(void)
 	struct hv_register_assoc registers[2];
 	union hv_input_vtl input_vtl;
 	int ret, count = 0;
+
+	#ifdef CONFIG_ARM64
+		/*
+		 * Nothing to do for now, just skip this.
+		 */
+		return 0;
+	#endif
 
 	/*
 	 * BUGBUG-ISOLATION: these registers all untrusted on hardware iso platforms.
@@ -645,9 +665,11 @@ static int hv_vtl_setup_synic(void)
 {
 	int ret;
 
+#ifndef CONFIG_ARM64
 	/* Use our isr to first filter out packets destined for userspace */
 	hv_setup_vmbus_handler(mshv_vtl_vmbus_isr);
 	hv_setup_percpu_vmbus_handler(mshv_vtl_vmbus_isr);
+#endif
 
 	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "hyperv/vtl:online",
 				mshv_vtl_alloc_context, NULL);
@@ -1425,6 +1447,11 @@ static int mshv_vtl_ioctl_return_to_lower_vtl(void)
 				goto done;
 		}
 
+		// TODO: CCA: hv_vp_assist_page is not allocated for CCA, so this
+		//       code will not work. We need to handle this in the future.
+#if defined(CONFIG_ARM64)
+		goto done;
+#endif
 		hvp = hv_vp_assist_page[smp_processor_id()];
 		this_cpu_inc(num_vtl0_transitions);
 		switch (hvp->vtl_entry_reason) {
@@ -1954,6 +1981,73 @@ static long mshv_vtl_ioctl_guest_vsm_vmsa_pfn(void __user *user_arg)
 }
 #endif
 
+#if defined(CONFIG_ARM64)
+extern struct realm_config realm_config;
+
+	static long mshv_realm_config(void __user *user_realm_config)
+	{
+		return copy_to_user(user_realm_config, &realm_config, sizeof(realm_config)) ? -EFAULT : 0;
+	}
+
+	static long mshv_rsi_sysreg_write(void __user *user_rsi_sysreg)
+	{
+		struct mshv_rsi_sysreg_write rsi_sysreg = {};
+		unsigned long plane_idx, a, b;
+		unsigned long ret;
+		
+		
+		if (copy_from_user(&rsi_sysreg, user_rsi_sysreg, sizeof(rsi_sysreg)))
+			return -EFAULT;
+		
+		pr_warn("mshv_rsi_sysreg_write sysreg: %lu. value: %lu\n", rsi_sysreg.sysreg, rsi_sysreg.value);
+		// TODO: CCA: need support for more than one plane
+		if (rsi_sysreg.vtl == 0) /* VTL0 */
+			plane_idx = 1;
+		else if (rsi_sysreg.vtl == 1) /* VTL1 */
+			plane_idx = 1;
+		else
+			return -EINVAL;
+		
+		// TODO: CCA: check if the sysreg write is valid
+
+		ret = rsi_plane_sysreg_write(plane_idx, rsi_sysreg.sysreg, rsi_sysreg.value);
+		if (ret != 0) {
+			pr_err("mshv_rsi_sysreg_write: failed to write sysreg, ret=%lu\n", ret);
+			return ret;
+		}
+
+		return ret;
+	}
+
+	static long mshv_rsi_set_mem_perm(void __user *user_mem_perm)
+	{
+		struct mshv_rsi_set_mem_perm rsi_mem_perm = {};
+		int ret;
+
+		if (copy_from_user(&rsi_mem_perm, user_mem_perm, sizeof(rsi_mem_perm)))
+			return -EFAULT;
+
+		pr_warn("mshv_rsi_set_mem_perm: plane=%u, base_addr=0x%llx, top_addr=0x%llx\n",
+			rsi_mem_perm.plane, rsi_mem_perm.base_addr, rsi_mem_perm.top_addr);
+
+		ret = rsi_mem_set_perm(rsi_mem_perm.plane, PLANE_N_MIN_PERM_IDX, PLANE_N_PERM);
+		if (ret < 0) {
+			pr_err("mshv_rsi_set_mem_perm: failed to set memory permissions, ret=%d\n", ret);
+			return ret;
+		}
+
+		ret = arm_mem_set_perm_index(rsi_mem_perm.base_addr, rsi_mem_perm.top_addr,
+				       PLANE_N_MIN_PERM_IDX);
+		if (ret < 0) {
+			pr_err("mshv_rsi_set_mem_perm: failed to set memory permissions, ret=%d\n", ret);
+			return ret;
+		}
+
+		return 0;
+	}
+
+#endif
+
 static void ack_kick(void *cancel_cpu_run)
 {
 	bool cancel = (bool)cancel_cpu_run;
@@ -2039,22 +2133,32 @@ mshv_vtl_ioctl(struct file *filp, unsigned int ioctl, unsigned long arg)
 	long ret;
 	struct mshv_vtl *vtl = filp->private_data;
 
+	pr_warn("mshv_vtl_ioctl: ID: %#x\n", ioctl);
 	switch (ioctl) {
 	case MSHV_VTL_SET_POLL_FILE:
 		ret = mshv_vtl_ioctl_set_poll_file(
 			(struct mshv_vtl_set_poll_file *)arg);
 		break;
 	case MSHV_GET_VP_REGISTERS:
-		ret = mshv_vtl_ioctl_get_regs((void __user *)arg);
+		// this should not be called for TMK
+		pr_warn("mshv_vtl_ioctl: MSHV_GET_VP_REGISTERS\n");
+		// ret = mshv_vtl_ioctl_get_regs((void __user *)arg);
+		ret = 0;
 		break;
 	case MSHV_SET_VP_REGISTERS:
-		ret = mshv_vtl_ioctl_set_regs((void __user *)arg);
+		// this should not be called for TMK
+		pr_warn("mshv_vtl_ioctl: MSHV_SET_VP_REGISTERS\n");
+		// ret = mshv_vtl_ioctl_set_regs((void __user *)arg);
+		ret = 0;
 		break;
 	case MSHV_VTL_RETURN_TO_LOWER_VTL:
+		pr_warn("mshv_vtl_ioctl: MSHV_VTL_RETURN_TO_LOWER_VTL\n");
 		ret = mshv_vtl_ioctl_return_to_lower_vtl();
 		break;
 	case MSHV_VTL_ADD_VTL0_MEMORY:
-		ret = mshv_vtl_ioctl_add_vtl0_mem(vtl, (void __user *)arg);
+		pr_warn("mshv_vtl_ioctl: MSHV_VTL_ADD_VTL0_MEMORY\n");
+		// ret = mshv_vtl_ioctl_add_vtl0_mem(vtl, (void __user *)arg);
+		ret = 0;
 		break;
 #if defined(CONFIG_X86_64) && defined(CONFIG_INTEL_TDX_GUEST)
 	case MSHV_VTL_TDCALL:
@@ -2089,6 +2193,18 @@ mshv_vtl_ioctl(struct file *filp, unsigned int ioctl, unsigned long arg)
 	case MSHV_VTL_KICK_CPU:
 		ret = mshv_vtl_ioctl_kick_cpu((void __user *)arg);
 		break;
+
+#if defined(CONFIG_ARM64)
+	case MSHV_REALM_CONFIG:
+		ret = mshv_realm_config((void __user *)arg);
+		break;
+	case MSHV_VTL_SYSREG_WRITE:
+		ret = mshv_rsi_sysreg_write((void __user *)arg);
+		break;
+	case MSHV_VTL_SET_MEM_PERM:
+		ret = mshv_rsi_set_mem_perm((void __user *)arg);
+		break;
+#endif
 
 	default:
 		dev_err(vtl->module_dev, "invalid vtl ioctl: %#x\n", ioctl);
@@ -2560,9 +2676,13 @@ static long mshv_vtl_hvcall_ioctl(struct file *f, unsigned int cmd, unsigned lon
 
 	switch (cmd) {
 	case MSHV_HVCALL_SETUP:
-		return mshv_vtl_hvcall_setup(fd, (struct mshv_vtl_hvcall_setup __user *)arg);
+		pr_warn("mshv_vtl_hvcall_ioctl: MSHV_HVCALL_SETUP\n");
+		// return mshv_vtl_hvcall_setup(fd, (struct mshv_vtl_hvcall_setup __user *)arg);
+		return 0;
 	case MSHV_HVCALL:
-		return mshv_vtl_hvcall_call(fd, (struct mshv_vtl_hvcall __user *)arg);
+		pr_warn("mshv_vtl_hvcall_ioctl: MSHV_HVCALL\n");
+		// return mshv_vtl_hvcall_call(fd, (struct mshv_vtl_hvcall __user *)arg);
+		return 0;
 	default:
 		break;
 	}
@@ -2782,10 +2902,13 @@ static int __init mshv_vtl_init(void)
 	if (ret)
 		goto unset_func;
 
-	ret = misc_register(&mshv_vtl_sint_dev);
-	if (ret)
-		goto unset_func;
-
+	/*
+	 * Hopefully this doesn't get used by userspace.
+	 * 
+	 *	ret = misc_register(&mshv_vtl_sint_dev);
+	 *	if (ret)
+	 *		goto unset_func;
+	 */
 	ret = misc_register(&mshv_vtl_hvcall);
 	if (ret)
 		goto free_sint;

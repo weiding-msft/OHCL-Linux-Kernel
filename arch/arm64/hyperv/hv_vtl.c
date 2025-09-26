@@ -8,9 +8,19 @@
 #include <asm/boot.h>
 #include <asm/mshyperv.h>
 #include <asm/cpu_ops.h>
+#include <asm/rsi_cmds.h>
+#include <linux/kdebug.h>
 
 void hv_vtl_return(struct hv_vtl_cpu_context *vtl0, union hv_input_vtl target_vtl, u32 flags, u64 vtl_return_offset)
 {
+#ifdef CONFIG_ARM_CCA_GUEST
+	u64 plane_run_addr = *((u64 *)vtl0);
+
+	// TODO: CCA: need support for more than one plane
+	rsi_plane_enter(1, plane_run_addr);
+	return;
+#endif
+
 	register u64 x18 asm("x18");
 
 	x18 = (u64)vtl0->x;

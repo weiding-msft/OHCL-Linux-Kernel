@@ -16,6 +16,8 @@
 #include <asm/fpu/types.h>
 #include <asm/fpu/xcr.h>
 #include <asm/realmode.h>
+#include <linux/memblock.h>
+#include <asm/rsi_cmds.h>
 #include <asm/tdx.h>
 #include <asm/reboot.h>
 #include <asm/sev.h>

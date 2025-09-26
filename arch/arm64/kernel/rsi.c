@@ -13,7 +13,8 @@
 #include <asm/mem_encrypt.h>
 #include <asm/rsi.h>
 
-struct realm_config config;
+struct realm_config realm_config;
+EXPORT_SYMBOL(realm_config);
 
 unsigned long prot_ns_shared;
 EXPORT_SYMBOL(prot_ns_shared);
@@ -124,9 +125,9 @@ void __init arm64_rsi_init(void)
 		return;
 	if (!rsi_version_matches())
 		return;
-	if (WARN_ON(rsi_get_realm_config(&config)))
+	if (WARN_ON(rsi_get_realm_config(&realm_config)))
 		return;
-	prot_ns_shared = BIT(config.ipa_bits - 1);
+	prot_ns_shared = BIT(realm_config.ipa_bits - 1);
 
 	if (arm64_ioremap_prot_hook_register(realm_ioremap_hook))
 		return;

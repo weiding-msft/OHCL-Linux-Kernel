@@ -118,6 +118,8 @@ struct mshv_vtl_run {
 #ifdef CONFIG_X86_64
 		struct tdx_vp_context tdx_context;
 #endif
+
+		// TODO: CCA: Figure out how to place the RSI plane context here.
 		/*
 		 * Reserving room for the cpu context to grow and be
 		 * able to maintain compat with user mode.

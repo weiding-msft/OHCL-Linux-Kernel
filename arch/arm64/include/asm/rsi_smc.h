@@ -43,6 +43,12 @@
 						   ARM_SMCCC_OWNER_STANDARD, \
 						   n)
 
+/* Number of general purpose registers per Plane */
+#define RSI_PLANE_NR_GPRS		31
+
+/* Maximum number of Interrupt Controller List Registers */
+#define RSI_PLANE_GIC_NUM_LRS		16
+
 /*
  * Returns RSI version.
  *
@@ -121,6 +127,33 @@
  * ret1 == Length of token bytes copied to the granule buffer
  */
 #define SMC_RSI_ATTESTATION_TOKEN_CONTINUE	SMC_RSI_FID(0x195)
+/*
+ * arg0 == Plane index
+ * arg1 == Permission Index
+ * arg2 == Permission
+ */
+#define SMC_RSI_MEM_SET_PERM_VALUE	SMC_RSI_FID(0x1A2)
+
+/*
+ * arg1 == Base address of IPA region
+ * arg2 == Size of IPA region in bytes
+ * arg3 == Permission Index
+ * arg4 == Cookie
+ * ret1 == New cookie value
+ */
+#define SMC_RSI_MEM_SET_PERM_INDEX	SMC_RSI_FID(0x1A1)
+
+/*
+ * arg0 == Plane index
+ * arg1 == struct rsi_plane_run addr
+ */
+#define SMC_RSI_PLANE_ENTER			SMC_RSI_FID(0x1A3)
+
+/*
+ * arg0 == Architecturally-defined sysreg address
+ * arg1 == Value
+ */
+#define SMC_RSI_PLANE_SYSREG_WRITE		SMC_RSI_FID(0x1AF)
 
 #ifndef __ASSEMBLY__
 
@@ -140,6 +173,134 @@ struct realm_config {
 	 * The RMM requires the configuration structure to be aligned to a 4k
 	 * boundary, ensure this happens by aligning this structure.
 	 */
+} __aligned(0x1000);
+
+
+/*
+ * EL1 system registers per Plane
+ */
+struct rsi_plane_el1_sysregs {
+	unsigned long sp_el0;			/*   0x0 */
+	unsigned long sp_el1;			/*   0x8 */
+	unsigned long elr_el1;			/*  0x10 */
+	unsigned long spsr_el1;			/*  0x18 */
+	unsigned long pmcr_el0;			/*  0x20 */
+	unsigned long pmuserenr_el0;		/*  0x28 */
+	unsigned long tpidrro_el0;		/*  0x30 */
+	unsigned long tpidr_el0;		/*  0x38 */
+	unsigned long csselr_el1;		/*  0x40 */
+	unsigned long sctlr_el1;		/*  0x48 */
+	unsigned long actlr_el1;		/*  0x50 */
+	unsigned long cpacr_el1;		/*  0x58 */
+	unsigned long zcr_el1;			/*  0x60 */
+	unsigned long ttbr0_el1;		/*  0x68 */
+	unsigned long ttbr1_el1;		/*  0x70 */
+	unsigned long tcr_el1;			/*  0x78 */
+	unsigned long esr_el1;			/*  0x80 */
+	unsigned long afsr0_el1;		/*  0x88 */
+	unsigned long afsr1_el1;		/*  0x90 */
+	unsigned long far_el1;			/*  0x98 */
+	unsigned long mair_el1;			/*  0xA0 */
+	unsigned long vbar_el1;			/*  0xA8 */
+	unsigned long contextidr_el1;		/*  0xB0 */
+	unsigned long tpidr_el1;		/*  0xB8 */
+	unsigned long amair_el1;		/*  0xC0 */
+	unsigned long cntkctl_el1;		/*  0xC8 */
+	unsigned long par_el1;			/*  0xD0 */
+	unsigned long mdscr_el1;		/*  0xD8 */
+	unsigned long mdccint_el1;		/*  0xE0 */
+	unsigned long disr_el1;			/*  0xE8 */
+	unsigned long mpam0_el1;		/*  0xF0 */
+
+	/* Timer Registers */
+	unsigned long cntp_ctl_el0;		/*  0xF8 */
+	unsigned long cntp_cval_el0;		/* 0x100 */
+	unsigned long cntv_ctl_el0;		/* 0x108 */
+	unsigned long cntv_cval_el0;		/* 0x110 */
+};
+
+/*
+ * Data passed from P0 to the RMM on entry to Pn
+ */
+struct rsi_plane_entry {
+	union {
+		struct {
+			unsigned long flags;				/* 0x000 */
+			unsigned long pc;				/* 0x008 */
+		};
+		unsigned char __reserved0[0x100];
+	};/* 0x0 - 0x100 */
+	union {
+		struct {
+			unsigned long gprs[RSI_PLANE_NR_GPRS];		/* 0x100 */
+		};
+		unsigned char __reserved1[0x100];
+	};/* 0x100 - 0x200 */
+	union {
+		struct {
+			unsigned long gicv3_hcr;			/* 0x200 */
+			unsigned long gicv3_lrs[RSI_PLANE_GIC_NUM_LRS];	/* 0x208 */
+		};
+		unsigned char __reserved3[0x100];
+	};/* 0x200 - 0x300 */
+};
+
+/*
+ * Data passed from the RMM to P0 on exit from Pn
+ */
+struct rsi_plane_exit {
+	union {
+		struct {
+			unsigned long exit_reason;			/* 0x000 */
+		};
+		unsigned char __reserved0[0x100];
+	};/* 0x0 - 0x100 */
+	union {
+		struct {
+			unsigned long elr_el2;				/* 0x100 */
+			unsigned long esr_el2;				/* 0x108 */
+			unsigned long far_el2;				/* 0x110 */
+			unsigned long hpfar_el2;			/* 0x118 */
+		};
+		unsigned char __reserved1[0x100];
+	};/* 0x100 - 0x200 */
+	union {
+		struct {
+			unsigned long gprs[RSI_PLANE_NR_GPRS];		/* 0x200 */
+		};
+		unsigned char __reserved2[0x100];
+	};/* 0x200 - 0x300 */
+	union {
+		struct {
+			unsigned long gicv3_hcr;			/* 0x300 */
+			unsigned long gicv3_lrs[RSI_PLANE_GIC_NUM_LRS];	/* 0x308 */
+			unsigned long gicv3_misr;			/* 0x388 */
+			unsigned long gicv3_vmcr;			/* 0x390 */
+			unsigned long cntp_ctl_el0;				/* 0x398 */
+			unsigned long cntp_cval_el0;			/* 0x3a0 */
+			unsigned long cntv_ctl_el0;				/* 0x3a8 */
+			unsigned long cntv_cval_el0;			/* 0x3b0 */
+		};
+		unsigned char __reserved4[0x100];
+	};/* 0x300 - 0x400 */
+};
+
+/*
+ * Data shared between P0 and the RMM during entry to and exit from Pn
+ */
+struct rsi_plane_run {
+	union {
+		struct {
+			struct rsi_plane_entry entry;			/* 0x000 */
+		};
+		unsigned char __reserved0[0x800];
+	};/* 0x000 - 0x800 */
+	union {
+		struct {
+			struct rsi_plane_exit exit; 			/* 0x800 */
+		};
+		unsigned char __reserved1[0x800];
+	};/* 0x800 - 0x1000*/
 } __aligned(0x1000);
 
 #endif /* __ASSEMBLY__ */
