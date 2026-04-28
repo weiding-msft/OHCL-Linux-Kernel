@@ -392,9 +392,9 @@ struct mshv_rsi_set_mem_perm {
 #define MSHV_HVCALL              _IOWR(MSHV_IOCTL, 0x1F, struct mshv_vtl_hvcall)
 
 /* For aarch64 only - get realm config values */
-#define MSHV_REALM_CONFIG                       _IOR(MSHV_IOCTL, 0x40, struct realm_config)
-#define MSHV_VTL_SYSREG_WRITE                   _IOW(MSHV_IOCTL, 0x41, struct mshv_rsi_sysreg_write)
-#define MSHV_VTL_SET_MEM_PERM                   _IOW(MSHV_IOCTL, 0x42, struct mshv_rsi_set_mem_perm)
+#define MSHV_REALM_CONFIG                       _IOR(MSHV_IOCTL, 0x41, struct realm_config)
+#define MSHV_VTL_SYSREG_WRITE                   _IOW(MSHV_IOCTL, 0x42, struct mshv_rsi_sysreg_write)
+#define MSHV_VTL_SET_MEM_PERM                   _IOW(MSHV_IOCTL, 0x43, struct mshv_rsi_set_mem_perm)
 
 /* register page mapping example:
  * struct hv_vp_register_page *regs = mmap(NULL,
